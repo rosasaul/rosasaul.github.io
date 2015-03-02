@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Projects | Obscure Ramblings of an Engineer]]></title>
+  <link href="http://rosasaul.github.io/blog/categories/projects/atom.xml" rel="self"/>
+  <link href="http://rosasaul.github.io/"/>
+  <updated>2015-03-02T13:40:00-08:00</updated>
+  <id>http://rosasaul.github.io/</id>
+  <author>
+    <name><![CDATA[Saul Rosa]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Perl Native SVM, a Bad Idea]]></title>
+    <link href="http://rosasaul.github.io/blog/2012/03/22/perl-svm/"/>
+    <updated>2012-03-22T00:00:00-07:00</updated>
+    <id>http://rosasaul.github.io/blog/2012/03/22/perl-svm</id>
+    <content type="html"><![CDATA[<p>First a short intro&hellip;</p>
+
+<h2>What is this?</h2>
+
+<p>It&rsquo;s a perl native support vector machine module with threading. So it&rsquo;s pure perl no C that then talks to perl via bindings. It&rsquo;s coded to use threading in a few areas and for general training. It also comes with front end perl scripts that for the most part (see the weight options) mirror libsvm&rsquo;s command line scripts. So you &ldquo;could&rdquo; use this as a drop in replacement of libsvm (with one exception, the pre-computed kernel, I never got around to it).</p>
+
+<h2>Why I did this</h2>
+
+<p>First and foremost I wanted to hands on build an SVM engine, to learn the structure. Second was to play around with threading svm model generation without needing to worry about memory cleanup. Finally, not the original goal but a nice side effect, improve some of my coding style as it relates to efficiency.</p>
+
+<h2>Why perl?</h2>
+
+<p>My job and my undergraduate degree are not focused or related to coding. I do however end up needing to create data mining and log parsing scripts on a regular basis and while I can code in many other languages I&rsquo;ve become most adept at perl. (Mostly because it&rsquo;s quick, and dirty in a way I find amusing (crazy one liners that do ridiculously complicated tasks).</p>
+
+<p>As you can guess though perl is a terrible choice for computing SVMs and as with most of my side projects, I&rsquo;ll likely rewrite things in C when it becomes painfully obvious I have no other choice.</p>
+
+<h2>It&rsquo;s a really bad idea</h2>
+
+<p>I can&rsquo;t stress enough how bad perl is at doing this. It really upset me to realize I was out of things I could do to optimize the code any further and even with threading there was a 30x to 500x increase in computation time.</p>
+
+<p>If on the other hand you can read perl more easily than C and want to learn how to compute SVMs there is this.</p>
+
+<p>Seriously though, if your implementing any of these types of algos for real use stick to C and at most create bindings to other languages. (by real use I mean if you run a test set and it consumes your entire memory space, you shouldn&rsquo;t even be considering what I wrote here as implementable)</p>
+
+<h2>Building, Testing, Sadness&hellip;</h2>
+
+<p>The code is in large part based on libsvm&rsquo;s svm.cpp file. It&rsquo;s a near 1-1 for large portions. I went through and modified and optimized a few things and added threading where it made sense (e.g . when the overhead of threading wouldn&rsquo;t actually slow things down).</p>
+
+<pre><code class="perl">sub _initialize_gradient { # threaded gradient builder
+  my ($self,$i_start,$i_end,$model,$y,$alpha,$alpha_status) = @_;
+  my @G;
+  my @G_bar;
+  my $gamma = $model-&gt;gamma();
+  my $coef0 = $model-&gt;coef0();
+  my $degree = $model-&gt;degree();
+  my $keySet = $self-&gt;{'keySet'};
+  for(my $i = $i_start ; $i &lt; $i_end; $i++){
+    if($$alpha_status[$i] ne 'lower_bound'){
+      my @Q_i = $self-&gt;get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
+      my $alpha_i = $$alpha[$i];
+      for(my $j=0; $j &lt; $self-&gt;{'problem'}{'count'}; $j++){
+        $G[$j] += $alpha_i * $Q_i[$j];
+      }
+      if($$alpha_status[$i] eq 'upper_bound'){
+        for(my $j=0; $j &lt; $self-&gt;{'problem'}{'count'}; $j++){
+          $G_bar[$j] += $self-&gt;get_C($i,$y) * $Q_i[$j];
+        }
+      }
+    }
+  }
+  return (\@G,\@G_bar);
+}
+</code></pre>
+
+<p>I tried to keep threading and non threading branches by wrapping threading points into functions so I could run the linear version as a reference and for nytprof.</p>
+
+<pre><code class="perl">sub train_one {
+  my ($self,$model) = @_;
+  if(!$self-&gt;{'threads'}){ return $self-&gt;train_one_lin($model); }
+</code></pre>
+
+<p>Testing was done using libsvm as a comparison and computting the same SVMs and diffing the results. Perl uses full sized floats by default so it&rsquo;s results mismatched C using the epsilon-svr kernel.</p>
+
+<p>Much to my dismay I was never able to get perl even close to the same performance as C. Now I know that seems crazy but the svm-scale.pl does out preform the C version purely because of threading. I had hoped the same might be true of large data sets using the perl version but as the chart below shows it grows at the samse rate as C and never converges. I have some ideas that could help get the curve down a bit but I&rsquo;m about ready to call it done and forcus on the C version and get threading working there.</p>
+
+<p><img src="https://docs.google.com/a/megaframe.org/spreadsheet/oimg?key=0Av2_5X8K1F8OdGgtMzhDX1lzZ0E0UDVOeUpydHRXMFE&oid=2&zx=y95040k6p5e7" /></p>
+
+<h2>Lesson&rsquo;s learned</h2>
+
+<p>Start with C on the first run, it was interesting and I found I had been doing some bad things in perl for a long time, but it just didn&rsquo;t result in anything all that useful.</p>
+
+<p>NYTProf is your friend. This is some super nice perl proffiling. You can&rsquo;t use threads with this (it&rsquo;ll just get confused) but use it linearly and it&rsquo;ll defentaly help weed out performance issues.</p>
+
+<p>Don&rsquo;t do this
+<code>perl
+sub _kernel_polynomial {
+  my $keySet = shift;
+  my $xSet = shift;
+  my $sv = shift;
+  my $gamma = shift;
+  my $coef0 = shift;
+  my $degree = shift;
+</code>
+Do this
+<code>perl
+sub _kernel_polynomial {
+  my ($keySet,$xSet,$sv,$gamma,$coef0,$degree) = @_;
+</code>
+I was surprised to find out just how much cputime doing shift on the global <code>@_</code> variable does. Nearly 1/3 of the cpu time was being wasted on that alone. Weird thing is I used to do it the right way till a year ago I saw someone using <code>shift</code> and thought to myself &ldquo;hey that looks pretty&rdquo;, lesson learned.</p>
+
+<h2>Next Steps</h2>
+
+<p>There&rsquo;s some open bugs I need to fix still. Mostly because I haven&rsquo;t been using them in this exact way.</p>
+
+<ul class="recent_posts">
+<li>
+svr_probability isn&#8217;t working - numbers dumped are wrong. Likely a typo somewhere in the calculation. I did a dead 1-1 copy from libsvm on this and just haven&#8217;t gone back to fix it yet.
+</li>
+<li>
+Shrinking - I don&#8217;t have it though for almost all my svm types it never helped, and I already cache the Q/Q_bar into memory so this is of little value in reducing cycle time.
+</li>
+<li>
+Cntrl-C handle -  I intended to have a handler to allow you to stop the svm process mid run, dump the contents to a file and then allow you to pickup latter. (In case you sleep in the same room as your server and can&#8217;t sleep with it running all night). Current tasks I run haven&#8217;t needed this as I usually trim down things using test sets and pca but it would still be nice.
+</li>
+<li>
+Memory optimizations - When it threads it does a full memory copy of the problem so if I&#8217;m using 1GB and I spawn 4 threads I&#8217;m using 5GB, which is rediculous since the sub threads don&#8217;t need the full training set, at most 2x would be ok (it&#8217;s still not), so I&#8217;m working on it.
+</li>
+<li>
+Perl Doc - It&#8217;s good practice to document things, and well I haven&#8217;t :(
+</li>
+</ul>
+
+
+<p>Finally with perl (and yes python) being unviable because of memory usage and runtime, the C version is still the best option. I&rsquo;m working on cleaning up a C version based on libsvm using pthreads. libsvm code isn&rsquo;t all that bad but I don&rsquo;t like the structure, and I&rsquo;m also going to use some libs to handel some trivial things like reading in options and parsing files, theirs no reason to do this by hand. I also want it to handle various compression formats like mine does.</p>
+
+<h2>Break down of the SVM</h2>
+
+<p>Now to the meat of this exercise.</p>
+
+<p>You can walk the libsvm code yourself and I did a couple of times, but like learning a foreign languadge it&rsquo;s best you know the foundation (the <a href="http://cs229.stanford.edu/notes/cs229-notes3.pdf">math itself</a>) and then practice writing it yourself.</p>
+
+<p>I&rsquo;ll walk through the simple one_class svm case using the rbf kernel.</p>
+
+<p>svm-train.pl is the wrapper it calls out the Algorythim::ML::SVM module. I&rsquo;ve decided to cary around the training data as part of the svm engine itself instead of creating another object or data structure to do this. Inside this scipt you&rsquo;ll see a set of default variables being set they setup the conditions for the SVM but most of this gets auto set on SVM creation too so a lot can be omitted.</p>
+
+<pre><code class="perl"># Setup SVM
+my $svm = new Algorithm::ML::SVM(\%config);
+
+# Read in Problem
+if($debug){ print STDERR "DBG: Read Problem\n"; }
+</code></pre>
+
+<p>Now we&rsquo;ll call out the training, this is where all the work happens. the <code>$save_file</code> variable isn&rsquo;t needed. This is something I added to retain the original support vectors used to build the model. I re-use these in other tools.</p>
+
+<pre><code class="perl">$svm-&gt;train($model,$save_file);
+</code></pre>
+
+<p>Inside this there&rsquo;s an if/else that selects the SVM type. if it will have multiple categories of Y then it splits each and trains on each grouping. In the single and the multiple Y version they then call on <code>train_one</code>.</p>
+
+<p><code>train_one</code> will in threaded mode create sub groups of evenly seperated vectors for each grouping to train on (this might no always be the best choice but on large enough same sets the error is very low). In non-threaded mode it calls out <code>train_one_lin</code>.</p>
+
+<p><code>train_one_lin</code> calls out the solver based on the selected mode. We&rsquo;ll follow <code>@alpha = $self-&gt;solve_one_class($model);</code>. An array of the alpha values (weights per vector) is returned and used later to decide which vectors will be kept as &ldquo;Support Vectors&rdquo;. This sets up some arrays needed in the computation. It&rsquo;s seperated here to deal with each of the svm types. It finally calls out the actual <code>solver</code> function that does the work (I know it took a while to widdle down to here).</p>
+
+<p>Now things get interesting&hellip; (I&rsquo;ll continue on the next write up)</p>
+]]></content>
+  </entry>
+  
+</feed>
